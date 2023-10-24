@@ -8,82 +8,166 @@ import numpy as np
 # Load model directly
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import pickle
+import wandb
 
-class WarmupLinearSchedule(LambdaLR):
-    """ Linear warmup and then linear decay.
-        Linearly increases learning rate from 0 to 1 over `warmup_steps` training steps.
-        Linearly decreases learning rate from 1. to 0. over remaining `t_total - warmup_steps` steps.
-    """
-    def __init__(self, optimizer, warmup_steps, t_total, last_epoch=-1):
-        self.warmup_steps = warmup_steps
-        self.t_total = t_total
-        super(WarmupLinearSchedule, self).__init__(optimizer, self.lr_lambda, last_epoch=last_epoch)
+from transformers import TrainingArguments, Trainer
+from rouge_score import rouge_scorer
+import numpy as np
+import evaluate
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+from transformers import get_scheduler,DataCollatorForSeq2Seq
+import os
 
-    def lr_lambda(self, step):
-        if step < self.warmup_steps:
-            return float(step) / float(max(1, self.warmup_steps))
-        return max(0.0, float(self.t_total - step) / float(max(1.0, self.t_total - self.warmup_steps)))
+import nltk
 
 def train_switch_base_8():
-    from rouge_score import rouge_scorer
-    # 创建ROUGE评分器
-    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
-    dataset = load_dataset("samsum")
+    def save_model(model,name):
+        model_to_save = model.module if hasattr(model, 'module') else model
+        model_checkpoint = os.path.join('/home/ubuntu/SwitchTransformer/pth/', "%s_checkpoint.bin" % name)
+        torch.save(model_to_save.state_dict(), model_checkpoint)
+        print("Saved model checkpoint to [DIR: /home/ubuntu/SwitchTransformer/pth/]")
+        # logger.info("Saved model checkpoint to [DIR: %s]", args.output_dir)
+    # nltk.download('punkt')
+    def postprocess_text(preds, labels):
+        preds = [pred.strip() for pred in preds]
+        labels = [label.strip() for label in labels]
 
+        # rougeLSum expects newline after each sentence
+        preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
+        labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
+
+        return preds, labels
+    
+    dataset = load_dataset("samsum")
     tokenizer = AutoTokenizer.from_pretrained("google/switch-base-8")
+    metric = evaluate.load("rouge")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/switch-base-8")
+
+    max_input_length = 1024
+    max_target_length = 20
+
+    def preprocess_function(examples):
+        # inputs = [doc for doc in examples['dialogue']]
+        model_inputs = tokenizer(examples['dialogue'], max_length=max_input_length, truncation=True)
+
+        # Setup the tokenizer for targets
+        labels = tokenizer(text_target=examples["summary"], max_length=max_target_length, truncation=True)
+        model_inputs["labels"] = labels["input_ids"]
+
+        return model_inputs
+
+    
+    # 创建ROUGE评分器
+    wandb.init(    # set the wandb project where this run will be logged
+    project="switch-8-samsum",
+    
+    # track hyperparameters and run metadata
+    
+    config={
+    "learning_rate": 5e-05,
+    "architecture": "switch-8",
+    "dataset": "samsum",
+    "epochs": 10,
+    }
+    )
+    # scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+    batch_size=4
+    # dataset = load_dataset("yelp_review_full")
+    tokenized_datasets = dataset.map(preprocess_function, batched=True)
+
+    tokenized_datasets.set_format("torch")
+    tokenized_datasets = tokenized_datasets.remove_columns(["dialogue"])
+    tokenized_datasets = tokenized_datasets.remove_columns(["id"])
+    tokenized_datasets = tokenized_datasets.remove_columns(["summary"])
+    train_dataset = tokenized_datasets["train"].shuffle(seed=42) # .select(range(1000))
+    eval_dataset = tokenized_datasets["test"].shuffle(seed=42) # .select(range(1000))
+    label_pad_token_id = tokenizer.pad_token_id
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer,
+        model=model,
+        label_pad_token_id=label_pad_token_id,
+        pad_to_multiple_of=None,
+    )
+    train_dataloader = DataLoader(
+        train_dataset, shuffle=True, collate_fn=data_collator, batch_size=batch_size
+    )
+    eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=batch_size)
 
     optimizer = torch.optim.Adam(model.parameters(),
                                 lr=5e-05,
                                 betas=(0.9,0.999),
                                 eps=1e-08)
-    # t_total = args.num_steps
-    scheduler = WarmupLinearSchedule(optimizer, 3, 6)
-    # scheduler = WarmupCosineSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
+    num_epochs = 10
+    num_training_steps = num_epochs * len(train_dataloader)
+    # lr_scheduler = WarmupLinearSchedule(optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
+
+    lr_scheduler = get_scheduler(
+        name="linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps
+    )
 
     model.train()
 
-    # model = reload_model(method[-1],model,0)
-    model = model.cuda()
-    index = 0
-    batch_size = 1
-    scores_list = {'rouge1':0,'rouge2':0,'rougeL':0}
-    dataset_length = len(dataset['test'])
-    for i in range(0,dataset_length,batch_size):
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+    progress_bar = tqdm(range(num_training_steps))
+    model = model.to(device)
+    best_acc = 0
+    model_name='switch_samsum_8'
+    # metric = evaluate.load("accuracy")
+    model.train()
+    
+    for epoch in range(num_epochs):
+        model.train()
+        step = 0
+        loss_all = 0
+        global_step = 0
+        for batch in train_dataloader:
+            # print(batch)
+            batch = {k: v.to(device) for k, v in batch.items()}
+            # batch['labels'] = tokenizer.batch_encode_plus(batch['labels'], truncation=True,padding=True, return_tensors="pt").to(device)
+            # batch['input_ids'] = batch['input_ids'].to(device)
+            # batch['attention_mask'] = batch['attention_mask'].to(device)
+            outputs = model(**batch)
+            loss = outputs.loss
+            loss.backward()
+            loss_all += loss.item()
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+            progress_bar.update(1)
+            global_step+=1
+            step += 1
+            wandb.log({'batch_loss': loss_all/step})
+            break
+        # wandb.log({'epoch': epoch, 'loss': loss.item()/step})
         
-        batchs = dataset['test'][i:i+batch_size]
-        doc, sum, _ = batchs['dialogue'], batchs['summary'], batchs['id']
+        model.eval()
+        for batch in eval_dataloader:
+            batch = {k: v.to(device) for k, v in batch.items()}
+            with torch.no_grad():
+                outputs = model(**batch)
 
-        input_ids = tokenizer(doc, truncation=True,padding=True, return_tensors="pt").input_ids 
-        input_ids = input_ids.cuda()
-        
-        # input_ids = tokenizer("The <extra_id_0> walks in <extra_id_1> park", return_tensors="pt").input_ids
+            logits = outputs.logits
+            predictions = torch.argmax(logits, dim=-1)
 
-        labels = tokenizer.batch_encode_plus(sum, truncation=True,padding=True, return_tensors="pt")
-        # input_ids['input_ids'] = input_ids['input_ids'].cuda()
-        # input_ids['attention_mask'] = input_ids['attention_mask'].cuda()
-        labels['input_ids'] = labels['input_ids'].cuda()
+            decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
+            decoded_labels = tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
 
-        outputs = model(input_ids=input_ids, labels=labels['input_ids'])
-        loss = outputs.loss
-        logits = outputs.logits
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-        # optimizer.step()
-        optimizer.zero_grad()
+            decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+            metric.add_batch(predictions=decoded_preds, references=decoded_labels)
 
-        outputs = list(outputs.squeeze(0).cpu().numpy())
-        outputs = tokenizer.convert_ids_to_tokens(outputs)
-        outputs = [token for token in outputs if not token.startswith("<") and not token.endswith(">")]
-        outputs = tokenizer.convert_tokens_to_string(outputs)
-        scores = scorer.score(outputs, sum[0])
-        for key in scores.keys():
-            scores_list[key] += scores[key].fmeasure/dataset_length
-        print(scores_list)
-
-        index += 1
-    print('scores: ',scores_list)
+        result = metric.compute(use_stemmer=True)
+        wandb.log({'loss': loss_all/step, 'rouge1': result['rouge1']})
+        if best_acc < result['rouge1']:
+            save_model( model,model_name)
+            best_acc = result['rouge1']
+        break
+    # print(result)
+    wandb.finish()
+    del model
+    del dataset
+    del tokenizer
 train_switch_base_8()
 
 def eval_score():
