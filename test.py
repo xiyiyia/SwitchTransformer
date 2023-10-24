@@ -40,12 +40,15 @@ def train_switch_base_8():
         return preds, labels
     
     dataset = load_dataset("samsum")
-    tokenizer = AutoTokenizer.from_pretrained("google/switch-base-8")
     metric = evaluate.load("rouge")
+
+    # tokenizer = AutoTokenizer.from_pretrained("emre/switch-base-8-finetuned-samsum")
+    tokenizer = AutoTokenizer.from_pretrained("google/switch-base-8")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/switch-base-8")
+    # model = AutoModelForSeq2SeqLM.from_pretrained("emre/switch-base-8-finetuned-samsum")
 
     max_input_length = 1024
-    max_target_length = 20
+    max_target_length = 128
 
     def preprocess_function(examples):
         # inputs = [doc for doc in examples['dialogue']]
@@ -57,8 +60,6 @@ def train_switch_base_8():
 
         return model_inputs
 
-    
-    # 创建ROUGE评分器
     wandb.init(    # set the wandb project where this run will be logged
     project="switch-8-samsum",
     
@@ -71,17 +72,22 @@ def train_switch_base_8():
     "epochs": 10,
     }
     )
-    # scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
-    batch_size=4
+    
+    batch_size=6
     # dataset = load_dataset("yelp_review_full")
+    
     tokenized_datasets = dataset.map(preprocess_function, batched=True)
 
+    
     tokenized_datasets.set_format("torch")
+    # tokenized_datasets = tokenized_datasets.remove_columns(["valid"])
     tokenized_datasets = tokenized_datasets.remove_columns(["dialogue"])
     tokenized_datasets = tokenized_datasets.remove_columns(["id"])
     tokenized_datasets = tokenized_datasets.remove_columns(["summary"])
+    
     train_dataset = tokenized_datasets["train"].shuffle(seed=42) # .select(range(1000))
     eval_dataset = tokenized_datasets["test"].shuffle(seed=42) # .select(range(1000))
+
     label_pad_token_id = tokenizer.pad_token_id
     data_collator = DataCollatorForSeq2Seq(
         tokenizer,
@@ -98,7 +104,7 @@ def train_switch_base_8():
                                 lr=5e-05,
                                 betas=(0.9,0.999),
                                 eps=1e-08)
-    num_epochs = 10
+    num_epochs = 3
     num_training_steps = num_epochs * len(train_dataloader)
     # lr_scheduler = WarmupLinearSchedule(optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
 
@@ -106,7 +112,7 @@ def train_switch_base_8():
         name="linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps
     )
 
-    model.train()
+    # model.train()
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -114,20 +120,14 @@ def train_switch_base_8():
     model = model.to(device)
     best_acc = 0
     model_name='switch_samsum_8'
-    # metric = evaluate.load("accuracy")
-    model.train()
     
     for epoch in range(num_epochs):
         model.train()
         step = 0
         loss_all = 0
-        global_step = 0
         for batch in train_dataloader:
-            # print(batch)
+            # break
             batch = {k: v.to(device) for k, v in batch.items()}
-            # batch['labels'] = tokenizer.batch_encode_plus(batch['labels'], truncation=True,padding=True, return_tensors="pt").to(device)
-            # batch['input_ids'] = batch['input_ids'].to(device)
-            # batch['attention_mask'] = batch['attention_mask'].to(device)
             outputs = model(**batch)
             loss = outputs.loss
             loss.backward()
@@ -136,38 +136,37 @@ def train_switch_base_8():
             lr_scheduler.step()
             optimizer.zero_grad()
             progress_bar.update(1)
-            global_step+=1
             step += 1
+            del batch
+            del loss
             wandb.log({'batch_loss': loss_all/step})
-            break
-        # wandb.log({'epoch': epoch, 'loss': loss.item()/step})
-        
+            
         model.eval()
         for batch in eval_dataloader:
             batch = {k: v.to(device) for k, v in batch.items()}
             with torch.no_grad():
-                outputs = model(**batch)
+                outputs = model.generate(batch['input_ids'])# (**batch)
 
-            logits = outputs.logits
-            predictions = torch.argmax(logits, dim=-1)
-
-            decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
+            decoded_preds = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             decoded_labels = tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
 
             decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+
             metric.add_batch(predictions=decoded_preds, references=decoded_labels)
 
-        result = metric.compute(use_stemmer=True)
+        result = metric.compute()
+
         wandb.log({'loss': loss_all/step, 'rouge1': result['rouge1']})
         if best_acc < result['rouge1']:
-            save_model( model,model_name)
+            save_model(model,model_name)
             best_acc = result['rouge1']
-        break
+        # break
     # print(result)
     wandb.finish()
     del model
     del dataset
     del tokenizer
+
 train_switch_base_8()
 
 def eval_score():
@@ -178,14 +177,24 @@ def eval_score():
 
     tokenizer = AutoTokenizer.from_pretrained("emre/switch-base-8-finetuned-samsum")
     model = AutoModelForSeq2SeqLM.from_pretrained("emre/switch-base-8-finetuned-samsum")
-    
+    metric = evaluate.load("rouge")
     model.eval()
 
     # model = reload_model(method[-1],model,0)
     model = model.cuda()
     index = 0
     batch_size = 1
-    scores_list = {'rouge1':0,'rouge2':0,'rougeL':0}
+    scores_list1 = {'rouge1':0,'rouge2':0,'rougeL':0,'rougeLsum':0}
+    scores_list = {'rouge1':{},'rouge2':{},'rougeL':{}}
+    for key in scores_list.keys():
+        for keys in range(0,3):
+            if keys == 0:
+                scores_list[key]['precision'] =0
+            if keys == 1:
+                scores_list[key]['recall'] =0
+            if keys == 2:
+                scores_list[key]['fmeasure'] =0
+                
     dataset_length = len(dataset['test'])
     for i in range(0,dataset_length,batch_size):
         
@@ -193,16 +202,28 @@ def eval_score():
         doc, sum, _ = batchs['dialogue'], batchs['summary'], batchs['id']
         input_ids = tokenizer(doc, return_tensors="pt").input_ids 
         input_ids = input_ids.cuda()
-        outputs = model.generate(input_ids,token_aggregate_layer=0,fuse_emb_method=0)  
+        outputs = model.generate(input_ids)  
         outputs = list(outputs.squeeze(0).cpu().numpy())
         outputs = tokenizer.convert_ids_to_tokens(outputs)
         outputs = [token for token in outputs if not token.startswith("<") and not token.endswith(">")]
         outputs = tokenizer.convert_tokens_to_string(outputs)
+        # scores1 = metric.compute(predictions=outputs, references=sum[0][0:len(outputs)])
         scores = scorer.score(outputs, sum[0])
+        # print(outputs, sum[0])
+        # for key in scores1.keys():
+        #     scores_list1[key] += scores1[key]/dataset_length
         for key in scores.keys():
-            scores_list[key] += scores[key].fmeasure/dataset_length
-        print(scores_list)
+            for keys in range(0,3):
+                if keys == 0:
+                    scores_list[key]['precision'] += scores[key].precision/dataset_length
+                if keys == 1:
+                    scores_list[key]['recall'] += scores[key].recall/dataset_length
+                if keys == 2:
+                    scores_list[key]['fmeasure'] += scores[key].fmeasure/dataset_length
+            # scores_list[key] += scores[key]/dataset_length
+        
         index += 1
+    # scores_list = metric.compute(use_stemmer=True)
     print('scores: ',scores_list)
 # eval_score()
 
