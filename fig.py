@@ -2,45 +2,33 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
 
-def fig(tensor_list,index):
-    # print(loaded_data)  # 打印加载的对象
-    A = []
-    for i in range(len(tensor_list)):
-        A.append(tensor_list[i].squeeze(1).cpu().numpy())
-    A = np.array(A)
-    B = [[0 for _ in range(0,4)] for __ in range(0,12)]
-    for i in range(len(A)):
-        for j in A[i]:
-            B[i][j] += 1
-    # A = A.reshape((10,48))
-    # A = A/197
-    B = np.array(B)/197
-    # print(B.shape,B)
-    # 生成示例向量集合
-    # vectors = np.random.rand(5, 10)  # 5个向量，每个向量包含10个元素
-    # list_a = []
-    # for i in tensor_list:
-    #     list_a.append(i.cpu().detach().squeeze(0).numpy())
-    # vectors = np.array(list_a)
-    
-    # 计算余弦相似度矩阵
-    # cosine_sim_matrix = cosine_similarity(vectors)
+config1 = {None:None,
+    '9-2':{
+        'purne_layer':[9, 11, 13, 15,17,19,21, 23],
+        'require_experts':[[0,2],[0],[0,1,2,3,4,6],[0,1,3,4,6],[1,2,3,4],[0,3,7],[0,7],[7]]},
+        '11-1':{
+        'purne_layer':[11, 13, 15,17,19,21, 23],
+        'require_experts':[[0],[0,1,2,3,4,6],[0,1,3,4,6],[1,2,3,4],[0,3,7],[0,7],[7]]},
+        '13-6':{
+        'purne_layer':[13, 15,17,19,21, 23],
+        'require_experts':[[0,1,2,3,4,6],[0,1,3,4,6],[1,2,3,4],[0,3,7],[0,7],[7]]},
+        '15-5':{
+        'purne_layer':[15,17,19,21, 23],
+        'require_experts':[[0,1,3,4,6],[1,2,3,4],[0,3,7],[0,7],[7]]},
+        '17-4':{
+        'purne_layer':[17,19,21, 23],
+        'require_experts':[[1,2,3,4],[0,3,7],[0,7],[7]]},
+        '19-3':{
+        'purne_layer':[19,21, 23],
+        'require_experts':[[0,3,7],[0,7],[7]]},
+        '21-2':{
+        'purne_layer':[21, 23],
+        'require_experts':[[0,7],[7]]},
+        '23-1':{
+        'purne_layer':[23],
+        'require_experts':[[7]]}
+        }
 
-    # 绘制热力图
-    plt.figure(figsize=(8, 6))
-    # print(cosine_sim_matrix.shape)
-    plt.imshow(B, cmap='viridis', interpolation='nearest')
-    plt.colorbar(label='frequency')
-
-    # 设置坐标轴标签
-    plt.xticks(np.arange(len(B[0])), range(len(B[0])))
-    plt.yticks(np.arange(len(B)), range(len(B)))
-
-    # 添加标题
-    plt.title('Cosine Similarity Heatmap')
-    plt.savefig('./imgs/second_models'+str(index),dpi=600)
-    # 显示热力图
-    # plt.show()
 
 def attnfig(tensor_list,tensor_list2,index):
     # print(loaded_data)  # 打印加载的对象
@@ -687,6 +675,329 @@ def expert_aggregate_fig_1():
 
     plt.savefig("imgs/acc_fuse_expert_nlp_2.png",dpi=600)
 
+def freq():
+    import pickle
+    # 打开文件以加载字典数据
+    with open("./experiment/router_dict.pkl", "rb") as file:
+        # 使用pickle.load()加载字典
+        loaded_dict = pickle.load(file)
+    selection_list = [[] for _ in range(12)]
+    for i in loaded_dict.keys():
+        index = 0
+        for j in loaded_dict[i]:
+            for k in j:
+                if len(k) == 1:
+                    continue
+                selection_list[index].append(k[1])
+                index += 1
+    # print(selection_list)
+    expert_frequency_list = [[0. for i in range(8)] for j in range(12)]
+    for i in range(len(selection_list)):
+        for j in selection_list[i]:
+            for k in j:
+                for l in k:
+                    expert_frequency_list[i][l] += 1.
+    print(expert_frequency_list)
+    B = np.array(expert_frequency_list)
+
+    for i in range(len(B)):
+        if i <= 5:
+            for j in range(len(B[i])):
+                B[i][j] = B[i][j]/327259
+            
+        else:
+            for j in range(len(B[i])):
+                B[i][j] = B[i][j]/49165
+    print(B)
+    plt.figure(figsize=(8, 6))
+    # print(cosine_sim_matrix.shape)
+    plt.imshow(B, cmap='viridis', interpolation='nearest')
+    plt.colorbar(label='frequency')
+
+    # 设置坐标轴标签
+    plt.xticks(np.arange(len(B[0])), range(len(B[0])))
+    plt.yticks(np.arange(len(B)), range(len(B)))
+
+    # 添加标题
+    plt.title('Cosine Similarity Heatmap')
+    plt.savefig('./imgs/Switch_base_8_heatmap_'+str(index),dpi=600)
+    # print(loaded_dict)
+
+def exp():
+    import pickle
+    ok_dict = {}
+    memory = []
+    time = []
+    rogue = []
+    big = [memory, time, rogue]
+    total_time = []
+    file_name = "./result/1026.pkl"
+    with open(file_name, 'rb') as file:
+        ok_dict  = pickle.load(file)
+    for key in config1.keys():
+        # ok_dict[key] = (memory,realt,rg)
+        # 指定要加载的文件名
+        # file_name = "./result/"+str(key)+'.pkl'
+        # 使用pickle加载词典从文件
+        for a,b in zip(ok_dict[key],big):
+            b.append(a)
+    print(big)
+
+    for i in big:
+        i.append(i[0])
+        i.pop(0)
+        # i.reverse()
+    plt.rcParams['pdf.fonttype'] = 42
+    plt.rcParams['xtick.direction'] = 'in'
+    plt.rcParams['ytick.direction'] = 'in'
+    # methods = ['original', 'Gat_aggregation_without_training','Gat_aggregation_after_training','Avg_8_to_1', 'Avg_8_to_2', 'Avg_8_to_4']
+
+    x_tick = list(config1.keys())
+    x_tick.append('Baseline')
+    x_tick.pop(0)
+    x_tick.reverse()
+    label_list = ['Memory', "Avg_time", "Acc"]
+    # label_list = [1,2]
+    color_list = [ "grey","green","#BD3106"] # ,"#EEBE04","#454B87","#6F9954"]
+    fig,ax = plt.subplots(figsize=(6,3),dpi=600)
+    # 示例数据，x坐标位置和对应的柱子高度
+    x = np.array(range(len(big[0])))
+    baseline_height = [100]  # 基准线高度
+    # 宽度设置，用于调整柱子之间的间距
+    width = 0.15
+
+    # 创建柱状图
+    # plt.bar(x[0], baseline_height[0], width, color='#5B7314')
+    # 创建柱状图
+    for i in range(len(label_list)):
+        for j in range(len(big[i])):
+            if i == 1:
+                big[i][j] = (big[i][j][0]/big[i][-1][0])*100
+            else:
+                big[i][j] = (big[i][j]/big[i][-1])*100
+        big[i].reverse()
+        plt.bar(x+i*width, big[i], width, label=label_list[i], color = color_list[i])# 创建柱状图
+
+
+    # 添加标题和标签
+    plt.ylabel('Normalized benchmark')
+
+    plt.ylim(0, 130)
+    x_ticks = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    plt.xticks(x+1.5*width, labels=x_tick)
+
+    plt.axhline(y=baseline_height[0], linestyle="--", color="grey")
+    plt.title('Overview')
+    # 添加图例
+    plt.legend(loc='upper center',scatterpoints=1, ncol = 4,prop = {'size':6})
+
+
+    plt.savefig("imgs/pyramid.png",dpi=600)
+    plt.close()
+
+    big = [[],[],[]]
+    file_name = "./result/1026.pkl"
+    with open(file_name, 'rb') as file:
+        ok_dict  = pickle.load(file)
+    for key in config1.keys():
+        for a,b in zip(ok_dict[key],big):
+            b.append(a)
+    print(big)
+    for i in big:
+        i.append(i[0])
+        i.pop(0)
+        i.reverse()
+
+
+    fig,ax = plt.subplots(figsize=(6,3),dpi=600)
+    plt.rcParams['pdf.fonttype'] = 42
+    plt.rcParams['xtick.direction'] = 'in'
+    plt.rcParams['ytick.direction'] = 'in'
+    # fig,ax = plt.subplots(figsize=(6,3),dpi=600)
+    # 示例数据，x坐标位置和对应的柱子高度
+    x = np.array(range(len(big[0])))
+    baseline_height = [big[0][0]]  # 基准线高度
+    width = 0.5
+    i= 0
+    plt.bar(x+i*width, big[i], width, label=label_list[i], color = color_list[i])# 创建柱状图
+
+    # 添加标题和标签
+    plt.ylabel('MiB')
+
+    # plt.ylim(0, 130)
+    x_ticks = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    plt.xticks(x, labels=x_tick)
+
+    plt.axhline(y=baseline_height[0], linestyle="--", color="grey")
+    plt.title('Memory')
+    # 添加图例
+    plt.legend(loc='upper center',scatterpoints=1, ncol = 4,prop = {'size':6})
+
+
+    plt.savefig("imgs/pyramid_memory.png",dpi=600)
+    plt.close()
+
+
+    fig,ax = plt.subplots(figsize=(6,3),dpi=600)
+    plt.rcParams['pdf.fonttype'] = 42
+    plt.rcParams['xtick.direction'] = 'in'
+    plt.rcParams['ytick.direction'] = 'in'
+    # fig,ax = plt.subplots(figsize=(6,3),dpi=600)
+    # 示例数据，x坐标位置和对应的柱子高度
+    x = np.array(range(len(big[0])))
+
+    for i in range(len(big[1])):
+        big[1][i] = big[1][i][0]*1000
+    # big[1].append(big[1][0])
+    # big[1].pop(0)
+    # big[1].reverse()
+
+    baseline_height = [big[1][0]]  # 基准线高度
+    width = 0.5
+    i= 1
+    plt.bar(x, big[i], width, label=label_list[i], color = color_list[i])# 创建柱状图
+
+    # 添加标题和标签
+    plt.ylabel('ms')
+
+    # plt.ylim(0, 130)
+    x_ticks = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    plt.xticks(x, labels=x_tick)
+
+    plt.axhline(y=baseline_height[0], linestyle="--", color="grey")
+    plt.title('Avg Latency')
+    # 添加图例
+    plt.legend(loc='upper center',scatterpoints=1, ncol = 4,prop = {'size':6})
+
+
+    plt.savefig("imgs/pyramid_latency.png",dpi=600)
+    plt.close()
+
+    fig,ax = plt.subplots(figsize=(6,3),dpi=600)
+    plt.rcParams['pdf.fonttype'] = 42
+    plt.rcParams['xtick.direction'] = 'in'
+    plt.rcParams['ytick.direction'] = 'in'
+    # fig,ax = plt.subplots(figsize=(6,3),dpi=600)
+    # 示例数据，x坐标位置和对应的柱子高度
+    x = np.array(range(len(big[0])))
+
+    for i in range(len(big[2])):
+        big[2][i] = big[2][i]*100
+    # big[2].append(big[2][0])
+    # big[2].pop(0)
+    # big[2].reverse()
+
+    baseline_height = [big[2][0]]  # 基准线高度
+    width = 0.5
+    i= 2
+    plt.bar(x, big[i], width, label=label_list[i], color = color_list[i])# 创建柱状图
+
+    # 添加标题和标签
+    plt.ylabel('ROUGE1')
+
+    # plt.ylim(0, 130)
+    x_ticks = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    plt.xticks(x, labels=x_tick)
+
+    plt.axhline(y=baseline_height[0], linestyle="--", color="grey")
+    plt.title('Acc')
+    # 添加图例
+    plt.legend(loc='upper center',scatterpoints=1, ncol = 4,prop = {'size':6})
+
+
+    plt.savefig("imgs/pyramid_acc.png",dpi=600)
+    plt.close()
+
+def fre_1():
+    import pickle
+    # print(loaded_data)  # 打印加载的对象
+    file_name = "./result/freq_o_train.pkl"
+    with open(file_name, 'rb') as file:
+        ok_dict  = pickle.load(file)
+    expert_frequency_list = [[0 for _ in range(8)] for _ in range(12)]
+    index = 0
+    for i in ok_dict:
+        
+        for j in i:
+            for k in j:
+                for l in k.tolist():
+                    expert_frequency_list[index][l] += 1.
+        index += 1
+
+    B = expert_frequency_list
+    total_sum = []
+    for i in B:
+        total_sum.append(sum(i)/float(len(i)))
+    A = [[] for _ in range(12)]
+    for i in range(len(A)):
+        for j in range(len(B[i])):
+            if B[i][j] >= total_sum[i]:
+                A[i].insert(-1,j)
+    
+    # A = [[] for _ in range(12)]
+    # for i in range(len(A)):
+    #     index = B[i].index(max(B[i])) # np.argmax(B[i,:])
+    #     A[i].insert(-1, index)
+    #     B[i][index] = 0
+    # while True:
+    #     total_sum = []
+    #     for i in B:
+    #         total_sum.append(sum(i))
+    #     # total_sum = sum(B,axis=1)
+    #     row_index = total_sum.index(max(total_sum))
+    #     while row_index != 0:
+    #         if len(A[row_index]) + 1 >= len(A[row_index - 1]) and len(A[row_index]) != 1:
+    #             total_sum[row_index] = 0
+    #             row_index = total_sum.index(max(total_sum))
+    #         elif max(total_sum) == 0:
+    #             break
+
+    #         else:
+    #             break
+    #     if max(total_sum) == 0:
+    #         break
+    #     index = B[row_index].index(max(B[row_index])) # np.argmax(B[row_index,:])
+    #     A[row_index].insert(-1,index) # A[row_index].append(index)
+    #     B[row_index][index] = 0
+
+    B = np.array(expert_frequency_list,dtype=float)
+    # print(B,B.sum(axis=1),B[0].sum())
+    
+    # total_sum = [0 for _ in range(12)]
+    print(A)
+    for i in range(len(B)):
+        if i <= 5:
+            for j in range(len(B[i])):
+                B[i] = B[i]/np.sum(B[i])
+            
+        else:
+            for j in range(len(B[i])):
+                B[i] = B[i]/np.sum(B[i])
+    # array = B[0]
+
+    # 归一化
+    # normalized_array = array / np.sum(array)
+    
+    # 检查结果是否接近1
+    # tolerance = 1e-6
+    # is_close_to_1 = np.isclose(np.sum(normalized_array), 1, rtol=tolerance)
+
+    # print(is_close_to_1,normalized_array)
+    print(B.sum(axis=1))
+    plt.figure(figsize=(8, 6))
+    # print(cosine_sim_matrix.shape)
+    plt.imshow(B, cmap='viridis', interpolation='nearest')
+    plt.colorbar(label='frequency')
+
+    # 设置坐标轴标签
+    plt.xticks(np.arange(len(B[0])), range(len(B[0])))
+    plt.yticks(np.arange(len(B)), range(len(B)))
+
+    # 添加标题
+    plt.title('Cosine Similarity Heatmap')
+    plt.savefig('./imgs/Switch_base_8_heatmap_o_train',dpi=600)
+
 if __name__ == "__main__":
     # expert_times()
-    expert_aggregate_fig()
+    # exp()
+    fre_1()
