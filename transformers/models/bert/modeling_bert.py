@@ -478,17 +478,17 @@ class CustomizedMoEPositionwiseFF(FMoETransformerMLP):
         self.layer_norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, inp, fuse_token=False, train_step=0):
+    def forward(self, inp):
         if self.pre_lnorm:
             ##### layer normalization + positionwise feed-forward
-            core_out, _ = super().forward(self.layer_norm(inp), fuse_token, train_step)
+            core_out, _ = super().forward(self.layer_norm(inp))
             core_out = self.dropout(core_out)
 
             ##### residual connection
             output = core_out + inp
         else:
             ##### positionwise feed-forward
-            core_out, _ = super().forward(inp, fuse_token, train_step)
+            core_out, _ = super().forward(inp)
             core_out = self.dropout(core_out)
 
             ##### residual connection + layer normalization
@@ -543,10 +543,13 @@ class BertLayer(nn.Module):
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
             self.crossattention = BertAttention(config, position_embedding_type="absolute")
 
-        
-        self.intermediate = BertIntermediate(config)
-        self.output = BertOutput(config)
-
+        if config.moe == False:
+            self.moe = False
+            self.intermediate = BertIntermediate(config)
+            self.output = BertOutput(config)
+        else:
+            self.moe = True
+            self.moe_linear = self.CustomizedMoEPositionwiseFF(moe_num_expert=config.num_experts)
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -601,11 +604,13 @@ class BertLayer(nn.Module):
             cross_attn_present_key_value = cross_attention_outputs[-1]
             present_key_value = present_key_value + cross_attn_present_key_value
 
-        layer_output = apply_chunking_to_forward(
-            self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
-        )
-        outputs = (layer_output,) + outputs
-
+        if not self.moe:
+            layer_output = apply_chunking_to_forward(
+                self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
+            )
+            outputs = (layer_output,) + outputs
+        else:
+            outputs = self.moe_linear(attention_output)
         # self.CustomizedMoEPositionwiseFF()
         # if decoder, return the attn key/values as the last output
         if self.is_decoder:

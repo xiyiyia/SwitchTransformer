@@ -537,18 +537,18 @@ def train_bert_base_8():
         batched=True,
         remove_columns=raw_datasets["train"].column_names,
     )
-    # validation_dataset = raw_datasets["validation"].map(
-    #     preprocess_validation_examples,
-    #     batched=True,
-    #     remove_columns=raw_datasets["validation"].column_names,
-    # )
-    # validation_dataset = validation_dataset.remove_columns(["example_id", "offset_mapping"])
-    eval_dataset = raw_datasets["test"].map(
+    eval_dataset = raw_datasets["validation"].map(
         preprocess_validation_examples,
         batched=True,
-        remove_columns=raw_datasets["test"].column_names,
+        remove_columns=raw_datasets["validation"].column_names,
     )
     validation_dataset = eval_dataset.remove_columns(["example_id", "offset_mapping"])
+    # eval_dataset = raw_datasets["test"].map(
+    #     preprocess_validation_examples,
+    #     batched=True,
+    #     remove_columns=raw_datasets["test"].column_names,
+    # )
+    # validation_dataset = eval_dataset.remove_columns(["example_id", "offset_mapping"])
 
     # tokenized_squad.set_format("torch")
     # tokenized_squadCopy = tokenized_squad.remove_columns(["example_id"])
@@ -565,7 +565,7 @@ def train_bert_base_8():
     #     label_pad_token_id=label_pad_token_id,
     #     pad_to_multiple_of=None,
     # )
-    batch_size=4
+    batch_size=32
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, collate_fn=data_collator, batch_size=batch_size
     )
@@ -613,10 +613,11 @@ def train_bert_base_8():
     # eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=batch_size)
 
     optimizer = torch.optim.Adam(model.parameters(),
-                                lr=3e-5,
-                                betas=(0.9,0.999),
-                                eps=1e-08)
-    num_epochs = 1
+                                lr=3e-5)
+    # ,
+                                # betas=(0.9,0.999),
+                                # eps=1e-08)
+    num_epochs = 8
     num_training_steps = num_epochs * len(train_dataloader)
     lr_scheduler = get_scheduler(
         name="linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps
@@ -667,7 +668,7 @@ def train_bert_base_8():
         start_logits = start_logits[: len(validation_dataset)]
         end_logits = end_logits[: len(validation_dataset)]
         # metrics = compute_metrics(start_logits, end_logits, validation_dataset, raw_datasets["validation"])
-        metrics = compute_metrics(start_logits, end_logits, eval_dataset, raw_datasets["test"])
+        metrics = compute_metrics(start_logits, end_logits, eval_dataset, raw_datasets["validation"])
         # {'exact_match': 83.0, 'f1': 88.25}
         wandb.log({'loss': loss_all/step, 'exact_match':metrics['exact_match'],'f1':metrics['f1']}) # 'rouge1': result['rouge1']})
         if best_acc < metrics['f1']:
