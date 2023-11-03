@@ -464,6 +464,71 @@ class BertOutput(nn.Module):
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
+from fmoe.transformer import FMoETransformerMLP
+class CustomizedMoEPositionwiseFF(FMoETransformerMLP):
+    def __init__(self, d_model, d_inner, dropout, pre_lnorm=False, moe_num_expert=64, moe_world_size=1, moe_group=None, moe_top_k=2):
+        activation = nn.Sequential(
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        super().__init__(num_expert=moe_num_expert, d_model=d_model, d_hidden=d_inner, world_size=moe_world_size, moe_group=moe_group,
+            top_k=moe_top_k, activation=activation)
+
+        self.pre_lnorm = pre_lnorm
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, inp, fuse_token=False, train_step=0):
+        if self.pre_lnorm:
+            ##### layer normalization + positionwise feed-forward
+            core_out, _ = super().forward(self.layer_norm(inp), fuse_token, train_step)
+            core_out = self.dropout(core_out)
+
+            ##### residual connection
+            output = core_out + inp
+        else:
+            ##### positionwise feed-forward
+            core_out, _ = super().forward(inp, fuse_token, train_step)
+            core_out = self.dropout(core_out)
+
+            ##### residual connection + layer normalization
+            output = self.layer_norm(inp + core_out)
+
+        return output # , fusion_costs
+
+# class BertMoELayerFF(nn.Module):
+#     r"""
+#     Add by Boqian Fu
+#     """
+
+#     def __init__(self, config):
+#         super().__init__()
+#         self.is_sparse = is_sparse
+
+#         # Check if it is a sparse layer, if not then it is a dense layer
+#         if not self.is_sparse:
+#             self.mlp = SwitchTransformersDenseActDense(config)
+#         else:
+#             self.mlp = SwitchTransformersSparseMLP(config)
+
+#         self.layer_norm = SwitchTransformersLayerNorm(config.d_model, eps=config.layer_norm_epsilon)
+#         self.dropout = nn.Dropout(config.dropout_rate)
+
+#     def forward(self, hidden_states, output_router_logits):
+#         forwarded_states = self.layer_norm(hidden_states)
+#         forwarded_states = self.mlp(forwarded_states)
+
+#         if isinstance(forwarded_states, tuple):
+#             forwarded_states, router_tuple = forwarded_states
+#         else:
+#             router_tuple = None
+
+#         output = hidden_states + self.dropout(forwarded_states)
+
+#         if output_router_logits and router_tuple is not None:
+#             output = (output, router_tuple)
+
+#         return output
 
 class BertLayer(nn.Module):
     def __init__(self, config):
@@ -477,6 +542,8 @@ class BertLayer(nn.Module):
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
             self.crossattention = BertAttention(config, position_embedding_type="absolute")
+
+        
         self.intermediate = BertIntermediate(config)
         self.output = BertOutput(config)
 
@@ -539,6 +606,7 @@ class BertLayer(nn.Module):
         )
         outputs = (layer_output,) + outputs
 
+        # self.CustomizedMoEPositionwiseFF()
         # if decoder, return the attn key/values as the last output
         if self.is_decoder:
             outputs = outputs + (present_key_value,)

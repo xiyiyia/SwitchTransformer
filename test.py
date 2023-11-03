@@ -13,15 +13,16 @@ import wandb
 from transformers import TrainingArguments, Trainer
 from rouge_score import rouge_scorer
 import numpy as np
-import evaluate
+# import evaluate
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_scheduler,DataCollatorForSeq2Seq
 import os
-
+from transformers import DefaultDataCollator
+import datasets
 import nltk
-
-
+import evaluate
+import collections
 config1 = {
     'Avg':{'model':'Avg_selection_model.bin','purne_layer':[1,3,5,7,9,11,13,15,17,19,21,23],'require_experts':
      [[5, 6, 7, 1], [1, 7, 0], [4, 7, 0], [2, 3, 6, 0], [2, 4, 0], [1, 2, 4, 0], [4, 0], [3, 6, 0], [3, 7, 0], [7, 5], [4, 6, 3], [7, 5]]},
@@ -273,8 +274,412 @@ def train_switch_base_8(some_args):
     del dataset
     del tokenizer
 
-train_switch_base_8('Avg')
+# train_switch_base_8('Avg')
 
+def train_bert_base_8():
+    from transformers import AutoModelForQuestionAnswering, TrainingArguments, Trainer
+    from huggingface_hub import notebook_login
+    from transformers import pipeline
+    # notebook_login()
+    def save_model(model,name):
+        model_to_save = model.module if hasattr(model, 'module') else model
+        model_checkpoint = os.path.join('/home/ubuntu/SwitchTransformer/pth/', "%s_checkpoint.bin" % name)
+        torch.save(model_to_save.state_dict(), model_checkpoint)
+        print("Saved model checkpoint to [DIR: /home/ubuntu/SwitchTransformer/pth/]")
+
+    def compute_metrics(start_logits, end_logits, features, examples):
+
+        n_best = 20
+        max_answer_length = 30
+
+        example_to_features = collections.defaultdict(list)
+        for idx, feature in enumerate(features):
+            example_to_features[feature["example_id"]].append(idx)
+
+        predicted_answers = []
+        for example in tqdm(examples):
+            example_id = example["id"]
+            context = example["context"]
+            answers = []
+
+            # Loop through all features associated with that example
+            for feature_index in example_to_features[example_id]:
+                start_logit = start_logits[feature_index]
+                end_logit = end_logits[feature_index]
+                offsets = features[feature_index]["offset_mapping"]
+
+                start_indexes = np.argsort(start_logit)[-1 : -n_best - 1 : -1].tolist()
+                end_indexes = np.argsort(end_logit)[-1 : -n_best - 1 : -1].tolist()
+                for start_index in start_indexes:
+                    for end_index in end_indexes:
+                        # Skip answers that are not fully in the context
+                        if offsets[start_index] is None or offsets[end_index] is None:
+                            continue
+                        # Skip answers with a length that is either < 0 or > max_answer_length
+                        if (
+                            end_index < start_index
+                            or end_index - start_index + 1 > max_answer_length
+                        ):
+                            continue
+
+                        answer = {
+                            "text": context[offsets[start_index][0] : offsets[end_index][1]],
+                            "logit_score": start_logit[start_index] + end_logit[end_index],
+                        }
+                        answers.append(answer)
+
+            # Select the answer with the best score
+            if len(answers) > 0:
+                best_answer = max(answers, key=lambda x: x["logit_score"])
+                predicted_answers.append(
+                    {"id": example_id, "prediction_text": best_answer["text"]}
+                )
+            else:
+                predicted_answers.append({"id": example_id, "prediction_text": ""})
+
+        theoretical_answers = [{"id": ex["id"], "answers": ex["answers"]} for ex in examples]
+        return metric.compute(predictions=predicted_answers, references=theoretical_answers)
+    # squad = load_dataset("squad", split="train[:10]")
+    # squad = squad.train_test_split(test_size=0.2)
+    # metric = evaluate.load("rouge")
+    # squad.set_format("torch")
+    # tokenizer = AutoTokenizer.from_pretrained("emre/switch-base-8-finetuned-samsum"
+    
+    # tokenized_datasets = tokenized_datasets.remove_columns(["valid"])
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    # model = purning_model(some_args) # AutoModelForSeq2SeqLM.from_pretrained("google/switch-base-8")
+    model = AutoModelForQuestionAnswering.from_pretrained("bert-base-uncased")
+    # model = AutoModelForSeq2SeqLM.from_pretrained("google/switch-base-8")
+    # model = AutoModelForSeq2SeqLM.from_pretrained("emre/switch-base-8-finetuned-samsum")
+
+    # max_input_length = 1024
+    # max_target_length = 128
+
+    max_length = 384
+    stride = 128
+
+
+    def preprocess_training_examples(examples):
+        questions = [q.strip() for q in examples["question"]]
+        inputs = tokenizer(
+            questions,
+            examples["context"],
+            max_length=max_length,
+            truncation="only_second",
+            stride=stride,
+            return_overflowing_tokens=True,
+            return_offsets_mapping=True,
+            padding="max_length",
+        )
+
+        offset_mapping = inputs.pop("offset_mapping")
+        sample_map = inputs.pop("overflow_to_sample_mapping")
+        answers = examples["answers"]
+        start_positions = []
+        end_positions = []
+
+        for i, offset in enumerate(offset_mapping):
+            sample_idx = sample_map[i]
+            answer = answers[sample_idx]
+            start_char = answer["answer_start"][0]
+            end_char = answer["answer_start"][0] + len(answer["text"][0])
+            sequence_ids = inputs.sequence_ids(i)
+
+            # Find the start and end of the context
+            idx = 0
+            while sequence_ids[idx] != 1:
+                idx += 1
+            context_start = idx
+            while sequence_ids[idx] == 1:
+                idx += 1
+            context_end = idx - 1
+
+            # If the answer is not fully inside the context, label is (0, 0)
+            if offset[context_start][0] > start_char or offset[context_end][1] < end_char:
+                start_positions.append(0)
+                end_positions.append(0)
+            else:
+                # Otherwise it's the start and end token positions
+                idx = context_start
+                while idx <= context_end and offset[idx][0] <= start_char:
+                    idx += 1
+                start_positions.append(idx - 1)
+
+                idx = context_end
+                while idx >= context_start and offset[idx][1] >= end_char:
+                    idx -= 1
+                end_positions.append(idx + 1)
+
+        inputs["start_positions"] = start_positions
+        inputs["end_positions"] = end_positions
+        return inputs
+
+    def preprocess_validation_examples(examples):
+        questions = [q.strip() for q in examples["question"]]
+        inputs = tokenizer(
+            questions,
+            examples["context"],
+            max_length=max_length,
+            truncation="only_second",
+            stride=stride,
+            return_overflowing_tokens=True,
+            return_offsets_mapping=True,
+            padding="max_length",
+        )
+
+        sample_map = inputs.pop("overflow_to_sample_mapping")
+        example_ids = []
+
+        for i in range(len(inputs["input_ids"])):
+            sample_idx = sample_map[i]
+            example_ids.append(examples["id"][sample_idx])
+
+            sequence_ids = inputs.sequence_ids(i)
+            offset = inputs["offset_mapping"][i]
+            inputs["offset_mapping"][i] = [
+                o if sequence_ids[k] == 1 else None for k, o in enumerate(offset)
+            ]
+
+        inputs["example_id"] = example_ids
+        return inputs
+    # def preprocess_function(examples):
+    #     questions = [q.strip() for q in examples["question"]]
+    #     inputs = tokenizer(
+    #         questions,
+    #         examples["context"],
+    #         max_length=384,
+    #         truncation="only_second",
+    #         return_overflowing_tokens=True,
+    #         return_offsets_mapping=True,
+    #         padding="max_length",
+    #     )
+
+    #     offset_mapping = inputs["offset_mapping"]
+        
+    #     answers = examples["answers"]
+    #     start_positions = []
+    #     end_positions = []
+
+    #     # add
+    #     # inputsCopy = tokenizer(
+    #     #     questions,
+    #     #     examples["context"],
+    #     #     max_length=384,
+    #     #     truncation="only_second",
+    #     #     stride=128,
+    #     #     return_overflowing_tokens=True,
+    #     #     return_offsets_mapping=True,
+    #     #     padding="max_length",
+    #     # )
+    #     example_ids = []
+    #     sample_map = inputs["overflow_to_sample_mapping"]
+    #     # sample_map = inputsCopy.pop("overflow_to_sample_mapping")
+
+    #     for i, offset in enumerate(offset_mapping):
+            
+    #         # add
+    #         sample_idx = sample_map[i]
+    #         example_ids.append(examples["id"][sample_idx])
+
+    #         sequence_ids = inputs.sequence_ids(i)
+    #         offset = inputs["offset_mapping"][i]
+    #         inputs["offset_mapping"][i] = [
+    #             o if sequence_ids[k] == 1 else None for k, o in enumerate(offset)
+    #         ]
+
+
+            
+    #         answer = answers[i]
+    #         start_char = answer["answer_start"][0]
+    #         end_char = answer["answer_start"][0] + len(answer["text"][0])
+    #         sequence_ids = inputs.sequence_ids(i)
+
+    #         # Find the start and end of the context
+    #         idx = 0
+    #         while sequence_ids[idx] != 1:
+    #             idx += 1
+    #         context_start = idx
+    #         while sequence_ids[idx] == 1:
+    #             idx += 1
+    #         context_end = idx - 1
+
+    #         # If the answer is not fully inside the context, label it (0, 0)
+    #         if offset[context_start][0] > end_char or offset[context_end][1] < start_char:
+    #             start_positions.append(0)
+    #             end_positions.append(0)
+    #         else:
+    #             # Otherwise it's the start and end token positions
+    #             idx = context_start
+    #             while idx <= context_end and offset[idx][0] <= start_char:
+    #                 idx += 1
+    #             start_positions.append(idx - 1)
+
+    #             idx = context_end
+    #             while idx >= context_start and offset[idx][1] >= end_char:
+    #                 idx -= 1
+    #             end_positions.append(idx + 1)
+
+    #     inputs["start_positions"] = start_positions
+    #     inputs["end_positions"] = end_positions
+    #     inputs["example_id"] = example_ids
+
+        
+
+    #     return inputs
+    
+    raw_datasets = load_dataset("squad")
+    # raw_datasets  = raw_datasets.train_test_split(test_size=0.2)
+    # raw_datasets  = raw_datasets.rename_column("test", "validation")
+    metric = evaluate.load("squad")
+    # tokenized_squad = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names)
+    train_dataset = raw_datasets["train"].map(
+        preprocess_training_examples,
+        batched=True,
+        remove_columns=raw_datasets["train"].column_names,
+    )
+    # validation_dataset = raw_datasets["validation"].map(
+    #     preprocess_validation_examples,
+    #     batched=True,
+    #     remove_columns=raw_datasets["validation"].column_names,
+    # )
+    # validation_dataset = validation_dataset.remove_columns(["example_id", "offset_mapping"])
+    eval_dataset = raw_datasets["test"].map(
+        preprocess_validation_examples,
+        batched=True,
+        remove_columns=raw_datasets["test"].column_names,
+    )
+    validation_dataset = eval_dataset.remove_columns(["example_id", "offset_mapping"])
+
+    # tokenized_squad.set_format("torch")
+    # tokenized_squadCopy = tokenized_squad.remove_columns(["example_id"])
+    # tokenized_squadCopy = tokenized_squadCopy.remove_columns(["overflow_to_sample_mapping"])
+    # tokenized_squadCopy = tokenized_squadCopy.remove_columns(["offset_mapping"])
+    data_collator = DefaultDataCollator()
+    # train_dataset = tokenized_squadCopy["train"].shuffle(seed=42) # .select(range(1000))
+    # eval_dataset = tokenized_squadCopy["test"] # .select(range(1000))
+    
+    # label_pad_token_id = tokenizer.pad_token_id
+    # data_collator = DataCollatorForSeq2Seq(
+    #     tokenizer,
+    #     model=model,
+    #     label_pad_token_id=label_pad_token_id,
+    #     pad_to_multiple_of=None,
+    # )
+    batch_size=4
+    train_dataloader = DataLoader(
+        train_dataset, shuffle=True, collate_fn=data_collator, batch_size=batch_size
+    )
+    eval_dataloader = DataLoader(validation_dataset, collate_fn=data_collator, batch_size=batch_size)
+
+    # metric = evaluate.load("squad_v2" if data_args.version_2_with_negative else "squad")
+    wandb.init(    # set the wandb project where this run will be logged
+    project="switch-8-samsum",
+    name='bert-test', # config1[some_args]['model'],
+    # track hyperparameters and run metadata
+    
+    config={
+    "learning_rate": 3e-5,
+    "architecture": "switch-8",
+    "dataset": "samsum",
+    "epochs": 10,
+    }
+    )
+    
+    # batch_size=4
+    # dataset = load_dataset("yelp_review_full")
+    
+    # tokenized_datasets = dataset.map(preprocess_function, batched=True)
+
+    
+    # tokenized_datasets.set_format("torch")
+    # tokenized_datasets = tokenized_datasets.remove_columns(["valid"])
+    # tokenized_datasets = tokenized_datasets.remove_columns(["dialogue"])
+    # tokenized_datasets = tokenized_datasets.remove_columns(["id"])
+    # tokenized_datasets = tokenized_datasets.remove_columns(["summary"])
+    
+    # train_dataset = tokenized_datasets["train"].shuffle(seed=42) # .select(range(1000))
+    # eval_dataset = tokenized_datasets["test"].shuffle(seed=42) # .select(range(1000))
+
+    # label_pad_token_id = tokenizer.pad_token_id
+    # data_collator = DataCollatorForSeq2Seq(
+    #     tokenizer,
+    #     model=model,
+    #     label_pad_token_id=label_pad_token_id,
+    #     pad_to_multiple_of=None,
+    # )
+    # train_dataloader = DataLoader(
+    #     train_dataset, shuffle=True, collate_fn=data_collator, batch_size=batch_size
+    # )
+    # eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=batch_size)
+
+    optimizer = torch.optim.Adam(model.parameters(),
+                                lr=3e-5,
+                                betas=(0.9,0.999),
+                                eps=1e-08)
+    num_epochs = 1
+    num_training_steps = num_epochs * len(train_dataloader)
+    lr_scheduler = get_scheduler(
+        name="linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps
+    )
+
+
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    progress_bar = tqdm(range(num_training_steps))
+    model = model.to(device)
+    best_acc = 0
+    model_name="bert" # config1[some_args]['model']
+    
+    for epoch in range(num_epochs):
+        model.train()
+        step = 0
+        loss_all = 0
+        for batch in train_dataloader:
+            # break
+            batch = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**batch)
+            loss = outputs.loss
+            loss.backward()
+            loss_all += loss.item()
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+            progress_bar.update(1)
+            step += 1
+            wandb.log({'batch_loss': loss_all/step})
+            # break
+        # dict_router = {}
+        # index = 0
+        model.eval()
+        # question_answerer = pipeline("question-answering", model=model)
+        start_logits = []
+        end_logits = []
+        # accelerator.print("Evaluation!")
+        for batch in eval_dataloader:
+            batch = {k: v.to(device) for k, v in batch.items()}
+            with torch.no_grad():
+                outputs = model(**batch)
+
+            start_logits.append(outputs.start_logits.cpu().numpy())
+            end_logits.append(outputs.end_logits.cpu().numpy())
+
+        start_logits = np.concatenate(start_logits)
+        end_logits = np.concatenate(end_logits)
+        start_logits = start_logits[: len(validation_dataset)]
+        end_logits = end_logits[: len(validation_dataset)]
+        # metrics = compute_metrics(start_logits, end_logits, validation_dataset, raw_datasets["validation"])
+        metrics = compute_metrics(start_logits, end_logits, eval_dataset, raw_datasets["test"])
+        # {'exact_match': 83.0, 'f1': 88.25}
+        wandb.log({'loss': loss_all/step, 'exact_match':metrics['exact_match'],'f1':metrics['f1']}) # 'rouge1': result['rouge1']})
+        if best_acc < metrics['f1']:
+            save_model(model,model_name)
+            best_acc = metrics['exact_match']
+    
+
+    wandb.finish()
+    del model
+    del raw_datasets
+    del tokenizer
+train_bert_base_8()
 
 def eval_switch_base_8(option=None):
     # def save_model(model,name):
@@ -389,7 +794,7 @@ def eval_switch_base_8(option=None):
 
     # wandb.finish()
     del model
-    del dataset
+    del datasets
     del tokenizer
     print(param_size, (avg_time, real_time), result['rouge1'])
     return param_size, (avg_time, real_time), result['rouge1']
