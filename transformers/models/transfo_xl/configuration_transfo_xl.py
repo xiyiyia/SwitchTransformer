@@ -172,6 +172,8 @@ class TransfoXLConfig(PretrainedConfig):
         self.proj_init_std = proj_init_std
         self.init_std = init_std
         self.layer_norm_epsilon = layer_norm_epsilon
+        self.moe=False
+        self.num_experts=8
         super().__init__(eos_token_id=eos_token_id, **kwargs)
 
     @property
