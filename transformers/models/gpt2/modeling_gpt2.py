@@ -358,6 +358,37 @@ class GPT2MLP(nn.Module):
         hidden_states = self.dropout(hidden_states)
         return hidden_states
 
+from fmoe.transformer import FMoETransformerMLP
+class CustomizedMoEPositionwiseFF(FMoETransformerMLP):
+    def __init__(self, d_model, d_inner, dropout, pre_lnorm=True, moe_num_expert=64, moe_world_size=1, moe_group=None, moe_top_k=2):
+        activation = nn.Sequential(
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        super().__init__(num_expert=moe_num_expert, d_model=d_model, d_hidden=d_inner, world_size=moe_world_size, moe_group=moe_group,
+            top_k=moe_top_k, activation=activation)
+        self.pre_lnorm = pre_lnorm
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, inp):
+        if self.pre_lnorm:
+            ##### layer normalization + positionwise feed-forward
+            core_out, _ = super().forward(self.layer_norm(inp))
+            core_out = self.dropout(core_out)
+
+            ##### residual connection
+            output = core_out + inp
+        else:
+            ##### positionwise feed-forward
+            core_out, _ = super().forward(inp)
+            core_out = self.dropout(core_out)
+
+            ##### residual connection + layer normalization
+            output = self.layer_norm(inp + core_out)
+
+        return output # , fusion_costs
+
 
 class GPT2Block(nn.Module):
     def __init__(self, config, layer_idx=None):
@@ -367,13 +398,19 @@ class GPT2Block(nn.Module):
 
         self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.attn = GPT2Attention(config, layer_idx=layer_idx)
-        self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
+        
 
         if config.add_cross_attention:
             self.crossattention = GPT2Attention(config, is_cross_attention=True, layer_idx=layer_idx)
             self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
-        self.mlp = GPT2MLP(inner_dim, config)
+        if not config.moe:
+            self.moe = False
+            self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
+            self.mlp = GPT2MLP(inner_dim, config)
+        else:
+            self.moe = True
+            self.moe_linear = CustomizedMoEPositionwiseFF(d_model=config.hidden_size,d_inner=inner_dim,dropout=config.resid_pdrop,moe_num_expert=config.num_experts)
 
     def forward(
         self,
@@ -424,9 +461,13 @@ class GPT2Block(nn.Module):
             outputs = outputs + cross_attn_outputs[2:]  # add cross attentions if we output attention weights
 
         residual = hidden_states
-        hidden_states = self.ln_2(hidden_states)
-        feed_forward_hidden_states = self.mlp(hidden_states)
+        if not self.moe:
+            hidden_states = self.ln_2(hidden_states)
+            feed_forward_hidden_states = self.mlp(hidden_states)
+        else:
+            feed_forward_hidden_states = self.moe_linear(hidden_states)
         # residual connection
+
         hidden_states = residual + feed_forward_hidden_states
 
         if use_cache:
@@ -543,7 +584,6 @@ GPT2_START_DOCSTRING = r"""
             Initializing with a config file does not load the weights associated with the model, only the
             configuration. Check out the [`~PreTrainedModel.from_pretrained`] method to load the model weights.
 """
-
 GPT2_INPUTS_DOCSTRING = r"""
     Args:
         input_ids (`torch.LongTensor` of shape `(batch_size, input_ids_length)`):

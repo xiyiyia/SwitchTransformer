@@ -496,40 +496,6 @@ class CustomizedMoEPositionwiseFF(FMoETransformerMLP):
 
         return output # , fusion_costs
 
-# class BertMoELayerFF(nn.Module):
-#     r"""
-#     Add by Boqian Fu
-#     """
-
-#     def __init__(self, config):
-#         super().__init__()
-#         self.is_sparse = is_sparse
-
-#         # Check if it is a sparse layer, if not then it is a dense layer
-#         if not self.is_sparse:
-#             self.mlp = SwitchTransformersDenseActDense(config)
-#         else:
-#             self.mlp = SwitchTransformersSparseMLP(config)
-
-#         self.layer_norm = SwitchTransformersLayerNorm(config.d_model, eps=config.layer_norm_epsilon)
-#         self.dropout = nn.Dropout(config.dropout_rate)
-
-#     def forward(self, hidden_states, output_router_logits):
-#         forwarded_states = self.layer_norm(hidden_states)
-#         forwarded_states = self.mlp(forwarded_states)
-
-#         if isinstance(forwarded_states, tuple):
-#             forwarded_states, router_tuple = forwarded_states
-#         else:
-#             router_tuple = None
-
-#         output = hidden_states + self.dropout(forwarded_states)
-
-#         if output_router_logits and router_tuple is not None:
-#             output = (output, router_tuple)
-
-#         return output
-
 class BertLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -549,7 +515,7 @@ class BertLayer(nn.Module):
             self.output = BertOutput(config)
         else:
             self.moe = True
-            self.moe_linear = self.CustomizedMoEPositionwiseFF(moe_num_expert=config.num_experts)
+            self.moe_linear = CustomizedMoEPositionwiseFF(d_model=config.hidden_size,d_inner=config.intermediate_size,dropout=config.hidden_dropout_prob,moe_num_expert=config.num_experts)
     def forward(
         self,
         hidden_states: torch.Tensor,

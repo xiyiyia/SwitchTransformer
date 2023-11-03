@@ -230,7 +230,37 @@ class PositionwiseFF(nn.Module):
 
         return output
 
+from fmoe.transformer import FMoETransformerMLP
+class CustomizedMoEPositionwiseFF(FMoETransformerMLP):
+    def __init__(self, d_model, d_inner, dropout, pre_lnorm=False, moe_num_expert=64, moe_world_size=1, moe_group=None, moe_top_k=2):
+        activation = nn.Sequential(
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        super().__init__(num_expert=moe_num_expert, d_model=d_model, d_hidden=d_inner, world_size=moe_world_size, moe_group=moe_group,
+            top_k=moe_top_k, activation=activation)
 
+        self.pre_lnorm = pre_lnorm
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, inp):
+        if self.pre_lnorm:
+            ##### layer normalization + positionwise feed-forward
+            core_out, _ = super().forward(self.layer_norm(inp))
+            core_out = self.dropout(core_out)
+
+            ##### residual connection
+            output = core_out + inp
+        else:
+            ##### positionwise feed-forward
+            core_out, _ = super().forward(inp)
+            core_out = self.dropout(core_out)
+
+            ##### residual connection + layer normalization
+            output = self.layer_norm(inp + core_out)
+
+        return output # , fusion_costs
 class RelPartialLearnableMultiHeadAttn(nn.Module):
     def __init__(
         self,
@@ -370,16 +400,20 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
 
 class RelPartialLearnableDecoderLayer(nn.Module):
-    def __init__(self, n_head, d_model, d_head, d_inner, dropout, layer_norm_epsilon=1e-5, **kwargs):
+    def __init__(self, n_head, d_model, d_head, d_inner, dropout, moe_config=None, layer_norm_epsilon=1e-5, **kwargs):
         super().__init__()
 
         self.dec_attn = RelPartialLearnableMultiHeadAttn(
             n_head, d_model, d_head, dropout, layer_norm_epsilon=layer_norm_epsilon, **kwargs
         )
-        self.pos_ff = PositionwiseFF(
-            d_model, d_inner, dropout, pre_lnorm=kwargs.get("pre_lnorm"), layer_norm_epsilon=layer_norm_epsilon
-        )
-
+        if not moe_config.moe:
+            self.moe = False
+            self.pos_ff = PositionwiseFF(
+                d_model, d_inner, dropout, pre_lnorm=kwargs.get("pre_lnorm"), layer_norm_epsilon=layer_norm_epsilon
+            )
+        else:
+            self.moe = True
+            self.moe_linear = CustomizedMoEPositionwiseFF(d_model=d_model,d_inner=d_inner,dropout=dropout,moe_num_expert=moe_config.num_experts)
     def forward(self, dec_inp, r, dec_attn_mask=None, mems=None, head_mask=None, output_attentions=False):
         attn_outputs = self.dec_attn(
             dec_inp,
@@ -389,8 +423,10 @@ class RelPartialLearnableDecoderLayer(nn.Module):
             head_mask=head_mask,
             output_attentions=output_attentions,
         )
-        ff_output = self.pos_ff(attn_outputs[0])
-
+        if not self.moe:
+            ff_output = self.pos_ff(attn_outputs[0])
+        else:
+            ff_output = self.moe_linear(attn_outputs[0])
         outputs = [ff_output] + attn_outputs[1:]
 
         return outputs
@@ -796,6 +832,8 @@ class TransfoXLModel(TransfoXLPreTrainedModel):
                         config.d_head,
                         config.d_inner,
                         config.dropout,
+                        # add by B
+                        moe_config=config,
                         dropatt=config.dropatt,
                         pre_lnorm=config.pre_lnorm,
                         r_w_bias=None if config.untie_r else self.r_w_bias,
