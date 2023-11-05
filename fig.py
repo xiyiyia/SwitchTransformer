@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
-
+import os
+# os.path('/home/SwitchTransformer/')
+import testfortestss # import Create_MoE_Model
 config1 = {None:None,
     '9-2':{
         'purne_layer':[9, 11, 13, 15,17,19,21, 23],
@@ -194,7 +196,6 @@ def expert(tensor_list):
     plt.savefig('./imgs/experts/1.png',dpi=600)
     # 显示热力图
     plt.show()
-
 def expert_total():
     import pickle
     file_name = 'output/dict.pkl'
@@ -236,7 +237,6 @@ def expert_total():
     plt.savefig('./imgs/experts/2.png',dpi=600)
     # 显示热力图
     plt.show()
-
 def tokenembedfig(tensor_list,tensor_list2,index):
     from sklearn.metrics.pairwise import cosine_similarity
     # print(loaded_data)  # 打印加载的对象
@@ -305,7 +305,6 @@ def tokenembedfig(tensor_list,tensor_list2,index):
             # 显示图表
             # plt.show()
 # expert_total()
-
 def tokenpcafig(tensor_list,tensor_list2,index):
     from sklearn.decomposition import PCA
     from sklearn.manifold import TSNE
@@ -407,7 +406,6 @@ def tokenpcafig(tensor_list,tensor_list2,index):
             # plt.savefig('./imgs/token_embed/'+'img_'+str(index)+'_'+str(layer)+'_layer_expert ' + str(k),dpi=600)
             # 显示图表
             # plt.show()
-
 def tokenembedfig(tensor_list,tensor_list2,index):
     from sklearn.metrics.pairwise import cosine_similarity
     # print(loaded_data)  # 打印加载的对象
@@ -476,7 +474,6 @@ def tokenembedfig(tensor_list,tensor_list2,index):
             # 显示图表
             # plt.show()
 # expert_total()
-
 
 def expert_aggregate_fig():
     import pickle
@@ -997,7 +994,29 @@ def fre_1():
     plt.title('Cosine Similarity Heatmap')
     plt.savefig('./imgs/Switch_base_8_heatmap_o_train',dpi=600)
 
+
+def get_model_size():
+    result_list = []
+    models = ['xl','bert','gpt']
+    num_experts = [4,8,16,32]
+    for model_name in models:
+        for expert in num_experts:
+            model,_ = testfortestss.Create_MoE_Model(model_name,expert)
+            param_size = 0
+            expert_size = 0
+            load_model = model.state_dict()
+            for key in load_model.keys():
+                if 'moe_linear' in key:
+                    expert_size += load_model[key].nelement() * load_model[key].element_size()
+                else:
+                    param_size += load_model[key].nelement() * load_model[key].element_size()
+            size_all_mb = (param_size) / 1024**2
+            size_expert_mb = (expert_size) / 1024**2
+            result_list.append((size_expert_mb, size_all_mb))
+            print('model size: {:.3f}MB  expert: {:.3f}MB'.format(size_all_mb, size_expert_mb))
+            del model
+    print(result_list)
 if __name__ == "__main__":
     # expert_times()
     # exp()
-    fre_1()
+    get_model_size()

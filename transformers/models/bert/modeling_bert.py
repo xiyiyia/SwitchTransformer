@@ -576,7 +576,7 @@ class BertLayer(nn.Module):
             )
             outputs = (layer_output,) + outputs
         else:
-            outputs = self.moe_linear(attention_output)
+            outputs = (self.moe_linear(attention_output),) + outputs
         # self.CustomizedMoEPositionwiseFF()
         # if decoder, return the attn key/values as the last output
         if self.is_decoder:
