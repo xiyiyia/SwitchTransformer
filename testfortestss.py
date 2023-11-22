@@ -130,12 +130,14 @@ def Create_MoE_Model(model_name, num_experts):
     if model_name == 'bert':
         config = AutoConfig.from_pretrained("bert-base-uncased")
         tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-        modelForLoad = BertForQuestionAnswering(config=config)
-        if num_experts == 0:
-            return modelForLoad,tokenizer
         config.moe=True
         config.num_experts=num_experts
         mymoe = BertForQuestionAnswering(config=config)
+        return mymoe, tokenizer
+        modelForLoad = BertForQuestionAnswering(config=config)
+        if num_experts == 0:
+            return modelForLoad,tokenizer
+
         # print(modelForLoad.state_dict().keys(),mymoe.state_dict().keys())
         mymoeParam = mymoe.state_dict()
         bertParam = modelForLoad.state_dict()
@@ -161,15 +163,17 @@ def Create_MoE_Model(model_name, num_experts):
         from transformers import TransfoXLForSequenceClassification
         tokenizer = AutoTokenizer.from_pretrained("transfo-xl-wt103")
         config = AutoConfig.from_pretrained("transfo-xl-wt103")
+        config.moe=True
+        config.num_experts=num_experts
+        mymoe = TransfoXLForSequenceClassification(config=config)
+        return mymoe, tokenizer
         # config.num_labels = 2
         modelForLoad = TransfoXLForSequenceClassification(config=config)
         if num_experts == 0:
             return modelForLoad,tokenizer
         # inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
         # outputs = modelForLoad(**inputs)
-        config.moe=True
-        config.num_experts=num_experts
-        mymoe = TransfoXLForSequenceClassification(config=config)
+
         # print(modelForLoad.state_dict().keys(),mymoe.state_dict().keys())
         mymoeParam = mymoe.state_dict()
         bertParam = modelForLoad.state_dict()
@@ -196,14 +200,17 @@ def Create_MoE_Model(model_name, num_experts):
         from transformers import GPT2LMHeadModel, AutoModelForCausalLM
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         config = AutoConfig.from_pretrained("gpt2")
+        config.moe=True
+        config.num_experts=num_experts
+        mymoe = GPT2LMHeadModel.from_pretrained("gpt2", config=config)
+        return mymoe, tokenizer
+    
         modelForLoad = GPT2LMHeadModel.from_pretrained("gpt2",config=config)
         if num_experts == 0:
             return modelForLoad,tokenizer
         # tokenizer = AutoTokenizer.from_pretrained("cwh/gpt2-medium-finetuned-wikitext2")
         # model = AutoModelForCausalLM.from_pretrained("cwh/gpt2-medium-finetuned-wikitext2")
-        config.moe=True
-        config.num_experts=num_experts
-        mymoe = GPT2LMHeadModel.from_pretrained("gpt2", config=config)
+
         # print(modelForLoad.state_dict().keys(),mymoe.state_dict().keys())
         mymoeParam = mymoe.state_dict()
         bertParam = modelForLoad.state_dict()

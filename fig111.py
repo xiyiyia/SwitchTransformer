@@ -999,23 +999,49 @@ def get_model_size():
     result_list = []
     models = ['xl','bert','gpt']
     num_experts = [4,8,16,32]
-    for model_name in models:
-        for expert in num_experts:
-            model,_ = testfortestss.Create_MoE_Model(model_name,expert)
-            param_size = 0
-            expert_size = 0
-            load_model = model.state_dict()
-            for key in load_model.keys():
-                if 'moe_linear' in key:
-                    expert_size += load_model[key].nelement() * load_model[key].element_size()
-                else:
-                    param_size += load_model[key].nelement() * load_model[key].element_size()
-            size_all_mb = (param_size) / 1024**2
-            size_expert_mb = (expert_size) / 1024**2
-            result_list.append((size_expert_mb, size_all_mb))
-            print('model size: {:.3f}MB  expert: {:.3f}MB'.format(size_all_mb, size_expert_mb))
-            del model
-    print(result_list)
+    # for model_name in models:
+    model_name = 'gpt'
+    for expert in num_experts:
+        model,_ = testfortestss.Create_MoE_Model(model_name,expert)
+        param_size = 0
+        expert_size = 0
+        load_model = model.state_dict()
+        
+        for key in load_model.keys():
+            if 'moe_linear' in key:
+                expert_size += load_model[key].nelement() * load_model[key].element_size()
+            else:
+                param_size += load_model[key].nelement() * load_model[key].element_size()
+        size_all_mb = (param_size) / 1024**2
+        size_expert_mb = (expert_size) / 1024**2
+        result_list.append((size_expert_mb, size_all_mb))
+        print('model size: {:.3f}MB  expert: {:.3f}MB'.format(size_all_mb, size_expert_mb))
+        del model
+    # print(result_list)
+    # model_name = 'bert'
+    # expert = 32
+    # model,_ = testfortestss.Create_MoE_Model(model_name,expert)
+    # print(model)
+    # param_size = 0
+    # expert_size = 0
+
+    # load_model = model.state_dict()
+    # del model
+    # keys_list = load_model.keys()
+    # for key in keys_list:
+    #     if 'moe_linear' in key:
+    #         expert_size += load_model[key].nelement() * load_model[key].element_size()
+    #         # load_model.pop(key)
+    #     else:
+    #         param_size += load_model[key].nelement() * load_model[key].element_size()
+    #         # load_model.pop(key)
+    #     # print(param_size,expert_size)
+    # size_all_mb = (param_size) / 1024**2
+    # size_expert_mb = (expert_size) / 1024**2
+    # result_list.append((size_expert_mb, size_all_mb))
+    # print('model size: {:.3f}MB  expert: {:.3f}MB'.format(size_all_mb, size_expert_mb))
+    # # del model
+    # print(result_list)
 if __name__ == "__main__":
     # expert_times()
     # exp()
